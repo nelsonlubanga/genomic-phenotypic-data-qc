@@ -1,0 +1,40 @@
+# Run from the project data/ folder: cd data
+mkdir -p ../plink
+
+# Inspect VCF
+bcftools view -H snp.vcf | wc -l          # variants
+bcftools query -l snp.vcf | wc -l         # samples
+bcftools query -l snp.vcf | head          # sample names
+bcftools query -f '%CHROM\t%POS\t%ID\t%REF\t%ALT\t%QUAL\t%FILTER\n' snp.vcf | head -n 5
+bcftools stats snp.vcf | grep '^SN'       # summary
+
+# VCF -> PLINK
+plink --vcf snp.vcf --double-id --allow-extra-chr --make-bed --out ../plink/snp_raw
+
+# Raw frequency and missingness
+plink --bfile ../plink/snp_raw --allow-extra-chr --freq --missing --out ../plink/snp_raw
+head ../plink/snp_raw.frq
+head ../plink/snp_raw.imiss               # per sample
+head ../plink/snp_raw.lmiss               # per SNP
+
+# Filter: samples >10% missing, SNPs >10% missing, MAF <5%
+plink --bfile ../plink/snp_raw       --allow-extra-chr --mind 0.10 --make-bed --out ../plink/snp_sample_qc
+plink --bfile ../plink/snp_sample_qc --allow-extra-chr --geno 0.10 --make-bed --out ../plink/snp_geno_qc
+plink --bfile ../plink/snp_geno_qc   --allow-extra-chr --maf 0.05  --make-bed --out ../plink/snp_filtered
+
+# Post-filter stats
+plink --bfile ../plink/snp_filtered --allow-extra-chr --freq --missing --out ../plink/snp_filtered_summary
+wc -l ../plink/snp_raw.fam ../plink/snp_raw.bim ../plink/snp_filtered.fam ../plink/snp_filtered.bim
+
+# LD pruning
+plink --bfile ../plink/snp_filtered --allow-extra-chr --indep-pairwise 50 5 0.2 --out ../plink/snp_ld
+plink --bfile ../plink/snp_filtered --allow-extra-chr --extract ../plink/snp_ld.prune.in --make-bed --out ../plink/snp_ld_pruned
+
+# Export: VCF and 0/1/2 matrix
+plink --bfile ../plink/snp_filtered --allow-extra-chr --recode vcf --out ../plink/snp_filtered
+plink --bfile ../plink/snp_filtered --allow-extra-chr --recode A   --out ../plink/snp_genomic_prediction
+head ../plink/snp_genomic_prediction.raw
+
+# Keep IID + genotypes (drop the 6 PLINK columns)
+awk 'BEGIN{OFS="\t"} {printf "%s", $2; for (i=7; i<=NF; i++) printf OFS "%s", $i; print ""}' \
+  ../plink/snp_genomic_prediction.raw > ../plink/snp_gs_012.tsv
